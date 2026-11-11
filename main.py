@@ -7,45 +7,19 @@ home_page = st.Page(
     default = True
 )
 
-prac_1 = st.Page(
-    "pages/practical-assignment-1.py",
-    title = "Practical Assignment 1 — Coordinate Conversion"
-)
-
-prac_2 = st.Page(
-    "pages/practical-assignment-2.py",
-    title = "Practical Assignment 2 — Working with Coordinates"
-)
-
-prac_3 = st.Page(
-    "pages/practical-assignment-3.py",
-    title = "Practical Assignment 3 — Direction"
-)
-
-prac_4 = st.Page(
-    "pages/practical-assignment-4.py",
-    title = "Practical Assignment 4 — Distance"
-)
-
-prac_5 = st.Page(
-    "pages/practical-assignment-5.py",
-    title = "Practical Assignment 5 — Area"
-)
-
-sck_2_a = st.Page(
+sec_a = st.Page(
     "pages/sck2-section-a.py",
-    title = "Sick Test 2 — Section A"
+    title = "Section A"
 )
 
-sck_2_b = st.Page(
+sec_b = st.Page(
     "pages/sck2-section-b.py",
-    title = "Sick Test 2 — Section B"
+    title = "Section B"
 )
 
 pages = st.navigation({
     "Home"            : [home_page],
-    "Practicals"      : [prac_1, prac_2, prac_3, prac_4, prac_5],
-    "Semester Test 2" : [sck_2_a, sck_2_b]
+    "Practicals"      : [sec_a, sec_b]
 })
 
 st.set_page_config(page_title="GGY 168 Grading App", layout="wide")

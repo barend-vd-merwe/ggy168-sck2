@@ -12,90 +12,49 @@ from datetime import datetime
 import yaml
 from streamlit_gsheets import GSheetsConnection
 from pathlib import Path
-import gc
+import custom_functions
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# custom functions
 # ------------------------------------------------------------
-def submission_viewer(img_url, height=1250, max_zoom_ratio=4.0, key="osd_viewer"):
-    # openseadragon
-    html_osd = f"""
-    <!DOCTYPE html>
-    <html style="height:100%">
-    <head>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/openseadragon.min.js"></script>
-        <style>
-            body {{
-    margin: 0;
-    padding: 0;
-    background-color: #F5F5DC;
-    height: 100%;
-    width: 100%;
-    overflow: hidden;}}
-            #openseadragon-container {{
-                width: 100vw;
-                height: 100vh;
-                background: #F5F5DC;
-                border: 10px solid #374151;
-                border-radius: 8px;
-    box-sizing: border-box;
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="openseadragon-container"></div>
-        <script type="text/javascript">
-            var viewer = OpenSeadragon({{
-                id: "openseadragon-container",
-                prefixUrl: "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/",
-                tileSources: {{
-                    type: 'image',
-                    url:  '{img_url}'
-                }},
-                // Performance and Zoom configuration
-                maxZoomPixelRatio: {max_zoom_ratio},
-                minZoomImageRatio: 0.8,
-                visibilityRatio: 0.8,
-                constrainDuringPan: true,
-                
-                // Controls setup
-                showNavigationControl: true,
-                navigationControlAnchor: OpenSeadragon.ControlAnchor.TOP_LEFT,
-                showRotationControl: false,
-                showFullPageControl: true,
-                showHomeControl: true,
-                
-                // Smooth interaction tuning
-                animationTime: 0.3,
-                bllendTime: 0.1,
-                springStiffness: 10
-            }});
-        </script>
-    </body>
-    </html>
-    """
-    st.iframe(html_osd, height=height)
+@st.cache_data(show_spinner="Aligning submission...", max_entries=3, scope = "session")
+def prepare_submission(file_bytes: bytes, filename: str):
+    ac = pd.read_csv("aruco-sck2.csv")
+    # store the submission in memory as cv2 object
+    img_bytes = np.frombuffer(image.getvalue(), dtype=np.uint8)
+    cv_img = cv.imdecode(img_bytes, cv.IMREAD_COLOR)
 
-# ------------------------------------------------------------
-def dms_to_dd(dms):
-    raw = dms.strip()
-    parts = raw.split("/")
-    nums = [float(p) for p in parts]
-    if len(nums) != 3:
-        st.error("Incorrect DMS entry. Entry must be dd/mm/ss (if there are no seconds, just enter 00).")
-    else:
-        try:
-            deg, minutes, sec = [float(p) for p in parts]
-            md = round(deg + (minutes / 60.0) + (sec / 3600.0), 4)
-        except:
-            st.error("Incorrect data entered.")
-    return md
+    try:
+        warped_img, method = custom_functions.aruco_align(cv_img, ac)
+    except:
+        template_img = cv.imread(BASE_DIR / "template-sck2-section-b.png")
+        warped_img, method = custom_functions.sift_align(template_img, cv_img)
+
+    shift = 8
+    factor = 1 << shift
+    bubble_radius = int(round(24 * factor))
+
+    ci = pd.read_csv(BASE_DIR / "dp-compass-intervals.csv")
+    for i in range(len(ci)):
+        rawx = ci.iloc[i]["cvx"]
+        rawy = ci.iloc[i]["cvy"]
+        cix = int(round(rawx * factor))
+        ciy = int(round(rawy * factor))
+        cv.circle(warped_img, (cix, ciy), bubble_radius, (0,0,255), 2, shift = shift)
+
+    _, disp_img = cv.imencode(".jpg",warped_img, [int(cv.IMWRITE_JPEG_QUALITY), 80])
+    b64_str = base64.b64encode(disp_img).decode("utf-8")
+    img_url = f"data:image/jpg;base64,{b64_str}"
+
+    return warped_img, img_url, method
+
+@st.cache_data(show_spinner="Aligning submission...", max_entries=3, scope = "session")
+def load_memo(filename):
+    with open (filename, "r", encoding = "utf-8") as file:
+                memo = yaml.safe_load(file)
+    return memo
 
 def grade_submission():
-    with open (BASE_DIR / "tst2-memo.yaml", "r", encoding = "utf-8") as file:
-        memo = yaml.safe_load(file)
-
     q9a_ans = memo["q9a"]["ans"]
     q9a_fc = memo["q9a"]["fc"]
     q9a_pc = memo["q9a"]["pc"]
@@ -147,7 +106,7 @@ def grade_submission():
     q10_grd = 0.0
 
     if "/" in q10_sub:
-        md = dms_to_dd(q10_sub)
+        md = custom_functions.dms_to_dd(q10_sub)
     else:
         md = float(q10_sub.strip())
 
@@ -174,7 +133,7 @@ def grade_submission():
     q11a_grd = 0.0
 
     if "/" in q11a_sub:
-        mfb = dms_to_dd(q11a_sub)
+        mfb = custom_functions.dms_to_dd(q11a_sub)
     else:
         mfb = float(q11a_sub.strip())
 
@@ -200,7 +159,7 @@ def grade_submission():
     q11b_grd = 0.0
 
     if "/" in q11b_sub:
-        mbb = dms_to_dd(q11b_sub)
+        mbb = custom_functions.dms_to_dd(q11b_sub)
     else:
         mbb = float(q11b_sub.strip())
 
@@ -228,7 +187,7 @@ def grade_submission():
     q12_grd = 0.0
 
     if "/" in q12_sub:
-        q12_tfb = dms_to_dd(q12_sub)
+        q12_tfb = custom_functions.dms_to_dd(q12_sub)
     else:
         q12_tfb = float(q12_sub.strip())
 
@@ -332,26 +291,19 @@ def grade_submission():
                                            st.session_state["q13_grd"],
                                            st.session_state["q14_grd"]])
 
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    gc = conn.read(ttl=0)
-    column_name = "Semester test 2 Section B [Total Pts: 23 Score] |2953723"
-    gc.loc[gc["Username"] == emplid, column_name] = st.session_state["final_grade"]
-    conn.update(data=gc)
+    cv.putText(warped_img, str(st.session_state["final_grade"]), (850,455), cv.FONT_HERSHEY_SIMPLEX, 3.0, (0,0,255), 1)
+    cv.putText(warped_img, st.session_state["student"], (303,199), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q9a_grd"]),(2226,367), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q9b_grd"]),(2226,473), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q10_grd"]),(2226,573), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q11a_grd"]),(2226,667), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q11b_grd"]),(2226,767), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q12_grd"]),(2226,861), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q13_grd"]),(2226,961), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q14_ans"]),(2226,1055), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
+    cv.putText(warped_img, str(st.session_state["q14_plot"]),(1863,2767), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
 
-    cv.putText(st.session_state["submission"], str(st.session_state["final_grade"]), (850,455), cv.FONT_HERSHEY_SIMPLEX, 3.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], st.session_state["student"], (303,199), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-
-    cv.putText(st.session_state["submission"], str(st.session_state["q9a_grd"]),(2226,367), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q9b_grd"]),(2226,473), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q10_grd"]),(2226,573), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q11a_grd"]),(2226,667), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q11b_grd"]),(2226,767), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q12_grd"]),(2226,861), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q13_grd"]),(2226,961), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q14_ans"]),(2226,1055), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-    cv.putText(st.session_state["submission"], str(st.session_state["q14_plot"]),(1863,2767), cv.FONT_HERSHEY_SIMPLEX, 2.0, (0,0,255), 1)
-
-    st.session_state["graded_submission"] = st.session_state["submission"]
+    st.session_state["graded_submission"] = warped_img
 
 def set_q9_blank():
     st.session_state["q9a_val"] = "0.0"
@@ -451,7 +403,7 @@ with title_col1:
 
 with title_col2:
     st.title("GGY 168 — Introduction to Physical Geography")
-    st.header("Semester Test 2")
+    st.header("Sick Test 2")
     st.subheader("Section B — Cartography")
 
 with st.expander("Instructions", expanded = False):
@@ -489,17 +441,14 @@ with st.sidebar:
                                       key = str(st.session_state["uploader_key"]))
     st.button("Clear", on_click = clear_files)
 
-valid_pin = st.secrets.get("secret_pin")
+valid_pin = st.secrets.get("sck-pin")
+
+memo = load_memo(BASE_DIR / "sck2-memo.yaml")
 
 if uploaded_files and grader.strip() and st.session_state["user_pin"].strip() == valid_pin:
     # display submission and grading tools in two cols
     col1, col2 = st.columns(2)
     with col1:
-        st.selectbox("Direction of measurement",
-                     ("Mox to Kelt", "Kelt to Mox"),
-                     index = 0,
-                     key = "q14_direction")
-
         total_scripts = len(uploaded_files)
         current_script = st.session_state["script_index"] + 1
         progress = min(current_script / total_scripts, 1.0)
@@ -512,120 +461,14 @@ if uploaded_files and grader.strip() and st.session_state["user_pin"].strip() ==
         surname, name, emplid = filename.split("_")
         st.session_state["student"] = f"{name} {surname} ({emplid})"
 
-        # store the submission in memory as cv2 object
-        img_bytes = np.frombuffer(image.getvalue(), dtype=np.uint8)
-        cv_img = cv.imdecode(img_bytes, cv.IMREAD_COLOR)
-
-        # prepare values for detector
-        aruco_dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
-        parameters = cv.aruco.DetectorParameters()
-        parameters.cornerRefinementMethod = cv.aruco.CORNER_REFINE_SUBPIX
-        parameters.cornerRefinementWinSize = 5
-        parameters.cornerRefinementMaxIterations = 100
-        parameters.cornerRefinementMinAccuracy = 0.01
-
-        # instantiate detector
-        detector = cv.aruco.ArucoDetector(aruco_dictionary, parameters)
-
         try:
-            # use detector to detect aruco markers
-            corners, ids, _ = detector.detectMarkers(cv_img)
-
-            # get the coordinates of the center points of each aruco marker
-            ids = ids.flatten().tolist()
-
-            aruco_0_index = ids.index(0)
-            aruco_0_corners = corners[aruco_0_index]
-            aruco_0_corners_rshp = aruco_0_corners.reshape((4,2))
-
-            aruco_1_index = ids.index(1)
-            aruco_1_corners = corners[aruco_1_index]
-            aruco_1_corners_rshp = aruco_1_corners.reshape((4,2))
-
-            aruco_2_index = ids.index(2)
-            aruco_2_corners = corners[aruco_2_index]
-            aruco_2_corners_rshp = aruco_2_corners.reshape((4,2))
-
-            aruco_3_index = ids.index(3)
-            aruco_3_corners = corners[aruco_3_index]
-            aruco_3_corners_rshp = aruco_3_corners.reshape((4,2))
-
-            aruco_markers = [aruco_0_corners_rshp,
-                             aruco_1_corners_rshp,
-                             aruco_2_corners_rshp,
-                             aruco_3_corners_rshp]
-
-            current_coords_list = []
-            for marker in aruco_markers:
-                for i in range(4):
-                    x_coord = marker[i,0]
-                    y_coord = marker[i,1]
-                    current_coords_list.append([x_coord, y_coord])
-            current_coords = np.array(current_coords_list, dtype=np.float32)
-
-            # Set target coordinates
-
-            ac = pd.read_csv(BASE_DIR / "aruco.csv")
-
-            target_coords_list = []
-
-            for i in range(len(ac)):
-                x_coord = ac.iloc[i,4]
-                y_coord = ac.iloc[i,5]
-                target_coords_list.append([x_coord, y_coord])
-
-            target_coords = np.array(target_coords_list, dtype=np.float32)
-
-            # transform the image
-            homography_matrix, mask = cv.findHomography(current_coords, target_coords, cv.RANSAC, 5.0)
-            warped_img = cv.warpPerspective(cv_img,
-                                            homography_matrix,
-                                            (2480, 3508),
-                                            flags=cv.INTER_LINEAR,
-                                            borderMode=cv.BORDER_CONSTANT,
-                                            borderValue=(255, 255, 255))
-            # add compass intervals
-            shift = 8
-            factor = 1 << shift
-            bubble_radius = int(round(24 * factor))
-
-            if st.session_state["q14_direction"] == "Mox to Kelt":
-                submission = warped_img.copy()
-                del warped_img
-                del cv_img
-                gc.collect()
-                ci = pd.read_csv(BASE_DIR / "mk-compass-intervals.csv")
-                for i in range(len(ci)):
-                    rawx = ci.iloc[i]["cvx"]
-                    rawy = ci.iloc[i]["cvy"]
-                    cix = int(round(rawx * factor))
-                    ciy = int(round(rawy * factor))
-                    cv.circle(submission, (cix, ciy), bubble_radius, (0,0,255), 2, shift = shift)
-                    st.session_state["submission"] = submission
-            else:
-                submission = warped_img.copy()
-                del warped_img
-                del cv_img
-                gc.collect()
-                ci = pd.read_csv(BASE_DIR / "km-compass-intervals.csv")
-                for i in range(len(ci)):
-                    rawx = ci.iloc[i]["cvx"]
-                    rawy = ci.iloc[i]["cvy"]
-                    cix = int(round(rawx * factor))
-                    ciy = int(round(rawy * factor))
-                    cv.circle(submission, (cix, ciy), bubble_radius, (0,0,255), 2, shift = shift)
-                    st.session_state["submission"] = submission
+            warped_img, img_url, method = prepare_submission(image.getvalue(), filename)
             
-            _, disp_img = cv.imencode(".jpg",submission, [int(cv.IMWRITE_JPEG_QUALITY), 80])
-            b64_str = base64.b64encode(disp_img).decode("utf-8")
-            img_url = f"data:image/png;base64,{b64_str}"
-
-
         except Exception as e:
             st.error(f"Processing failed: {e}")
             img_url = None
   
-        submission_viewer(img_url)
+        custom_functions.submission_viewer(img_url)
 
     with col2:
         # display student details
@@ -634,6 +477,7 @@ if uploaded_files and grader.strip() and st.session_state["user_pin"].strip() ==
             - *Name*: **{name}**
             - *Surname*: **{surname}**
             - *Student Number*: **{emplid}**
+            - *Alignment Method*: **{method}**
             """)
 
         with st.expander("Questions", expanded = True):
@@ -644,8 +488,8 @@ if uploaded_files and grader.strip() and st.session_state["user_pin"].strip() ==
             q9_col1, q9_col2 = st.columns(2)
             
             with q9_col1:
-                st.text_input("Tfb (Bryn to Mox)", key = "q9a_val")
-                st.text_input("Tbb (Bryn to Mox)", key = "q9b_val")
+                st.text_input("Tfb (Vex to Galt)", key = "q9a_val")
+                st.text_input("Tbb (Vex to Galt)", key = "q9b_val")
 
             with q9_col2:
                 st.selectbox("Units",
@@ -683,8 +527,8 @@ if uploaded_files and grader.strip() and st.session_state["user_pin"].strip() ==
             q11_col1, q11_col2 = st.columns(2)
 
             with q11_col1:
-                st.text_input("Mfb (Kelt to Zuni)", key = "q11a_val")
-                st.text_input("Mbb (Kelt to Zuni)", key = "q11b_val")
+                st.text_input("Mfb (Vex to Pim)", key = "q11a_val")
+                st.text_input("Mbb (Vex to Pim)", key = "q11b_val")
 
             with q11_col2:
                 st.selectbox("Units",
